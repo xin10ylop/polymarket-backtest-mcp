@@ -1,0 +1,5 @@
+fastmcp>=3.0,<4
+pandas>=2.0
+pyarrow>=14
+kagglehub>=0.3
+pytest>=8

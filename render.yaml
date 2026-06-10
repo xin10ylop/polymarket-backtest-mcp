@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: polymarket-backtest-mcp
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    autoDeploy: true
