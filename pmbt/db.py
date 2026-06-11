@@ -150,9 +150,21 @@ class Store:
             (slug,),
         ).fetchall()
 
+    def side_quotes_btc(self, slug: str, side: str):
+        """(ts_ms, bid_milli, ask_milli, btc_ref) tuples for the strategy
+        engine. btc_ref is the display-grade reference feed: usable as a
+        signal input only, never for resolution."""
+        bid, ask = SIDE_COLS[side]
+        return self.con.execute(
+            f"SELECT ts_ms, {bid}, {ask}, btc_ref FROM quotes"
+            " WHERE slug=? ORDER BY ts_ms",
+            (slug,),
+        ).fetchall()
+
     def markets_for_backtest(self, duration_minutes=5, start_ms=None, end_ms=None,
                              max_markets=None):
-        q = ("SELECT slug, window_start_ms, winner, tradeable FROM markets"
+        q = ("SELECT slug, window_start_ms, window_end_ms, winner, tradeable"
+             " FROM markets"
              " WHERE duration_minutes=? AND tradeable=1 AND winner IS NOT NULL")
         args = [duration_minutes]
         if start_ms is not None:

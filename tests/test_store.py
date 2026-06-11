@@ -75,9 +75,11 @@ def test_side_quotes_do_not_mix_sides_or_markets(db):
 
 def test_backtest_universe_carries_no_price_to_beat(db):
     """Approximate or official price_to_beat physically cannot reach PnL code:
-    the backtest universe rows only contain slug, window, winner, tradeable."""
+    the backtest universe rows only contain slug, window bounds, winner,
+    tradeable (window_end_ms feeds the time bricks, not resolution)."""
     for m in db.markets_for_backtest():
-        assert set(m.keys()) == {"slug", "window_start_ms", "winner", "tradeable"}
+        assert set(m.keys()) == {"slug", "window_start_ms", "window_end_ms",
+                                 "winner", "tradeable"}
 
 
 def test_slug_window_is_duration_agnostic():

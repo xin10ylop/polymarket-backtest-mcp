@@ -12,7 +12,7 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
-from . import engine
+from . import engine, strategy as strat_mod
 from .db import Store, iso, parse_date
 from .landing import landing_html
 
@@ -151,20 +151,47 @@ def backtest(
     start_date: str | None = None,
     end_date: str | None = None,
     max_markets: int | None = None,
+    strategy: dict | None = None,
 ) -> dict:
-    """Backtest a resting-limit entry with a fixed take-profit, one trade per market.
+    """Backtest a strategy over historical markets, one trade per market max.
 
-    Strategy: rest a limit BUY on the chosen side at entry_price (dollars,
-    e.g. 0.40). It fills at the first tick where that side's best ask <= entry
-    price. On fill, rest a limit SELL at entry_price + take_profit_cents; it
-    fills at the limit price at the first later tick where the best bid >= the
-    target. If the take-profit never fills, the position force-resolves at
-    window end: $1.00 if the held side won, $0.00 otherwise. Maker fees are 0
-    on Polymarket, so taker_fee defaults to 0 (override to simulate market
-    orders). Dates are 'YYYY-MM-DD' UTC, end inclusive.
+    Two ways to specify the strategy:
+    1. Legacy flat params (side, entry_price in dollars, take_profit_cents):
+       rest a limit BUY at entry_price, take profit at +take_profit_cents,
+       hold to resolution otherwise. Equivalent to a brick strategy with no
+       entry conditions and a limit execution.
+    2. A composed `strategy` object built from predefined bricks (overrides
+       the flat params). Call strategy_vocabulary() for the full schema and
+       three worked examples. Sketch:
+       {"side": "up"|"down",
+        "entry": {"conditions": [{"type": "price_level"|"price_move"|
+                                  "time_to_close"|"btc_move", ...}],
+                  "execution": {"style": "limit", "limit_price_cents": 40}
+                               | {"style": "market"}},
+        "exit": {"take_profit_cents": 5, "stop_loss_cents": 3,
+                 "exit_seconds_before_close": 30}}  # all optional
+       Only structured parameters are accepted; no expressions or code.
+
+    Fees: maker fills (limit entry, take-profit) are free; taker fills
+    (market entry, stop-loss, time exit) pay taker_fee, a flat fraction of
+    notional (default 0). Real Polymarket taker fees are odds-dependent
+    (peak near 50c, roughly up to ~1.8%); the flat rate is an approximation.
+
+    Walk-forward testing: split the data with start_date/end_date (UTC,
+    end inclusive), e.g. tune on 2026-03-05..2026-04-08 and validate the
+    chosen parameters once on 2026-04-09..2026-04-25.
+
+    Runtime: a full-universe run (~14k markets) takes a few seconds of CPU;
+    on small shared hosts allow up to a couple of minutes. For heavy
+    multi-condition strategies prefer a date range or max_markets first.
     """
     try:
         st = store()
+        if strategy is not None:
+            strat = strat_mod.validate_strategy(strategy)
+        else:
+            strat = strat_mod.legacy_strategy(side, entry_price,
+                                              take_profit_cents)
         start_ms = parse_date(start_date)
         end_ms = parse_date(end_date, end=True)
         markets = st.markets_for_backtest(
@@ -173,14 +200,14 @@ def backtest(
             end_ms=end_ms,
             max_markets=max_markets,
         )
-        res = engine.run_backtest(
-            markets, lambda s: st.side_quotes(s, side), side,
-            entry_price, take_profit_cents, taker_fee=taker_fee,
+        res = strat_mod.run_backtest(
+            markets, lambda s: st.side_quotes_btc(s, strat.side), strat,
+            taker_fee=taker_fee,
         )
     except ValueError as e:
         return {"error": str(e)}
 
-    summary = engine.summarize(res)
+    summary = strat_mod.summarize(res)
     starts = [m["window_start_ms"] for m in markets]
     days = {iso(t)[:10] for t in starts}
     coverage = {
@@ -191,25 +218,65 @@ def backtest(
         "markets_tested": res.markets_tested,
         "untriggered_markets": res.untriggered_markets,
     }
-    entry_c = round(entry_price * 100, 1)
+    if strat.tp_delta_milli and not strat.stop_delta_milli:
+        skew = (f"Negative skew: upside is capped at "
+                f"{strat.tp_delta_milli / 10}c per trade, but a forced loss "
+                f"costs the full entry price.")
+    elif strat.stop_delta_milli:
+        skew = (f"The {strat.stop_delta_milli / 10}c stop limits normal "
+                f"downside, but stops fill at the OBSERVED bid: a gap through "
+                f"the stop loses more than the stop distance.")
+    else:
+        skew = ("No take-profit set: PnL is driven by exit timing and $1/$0 "
+                "resolution outcomes.")
     return {
-        "params": {
-            "side": side, "entry_price": entry_price,
-            "take_profit_cents": take_profit_cents, "taker_fee": taker_fee,
-            "duration_minutes": duration_minutes,
-        },
+        "params": {"taker_fee": taker_fee, "duration_minutes": duration_minutes},
+        "strategy": strat.canonical,
         "coverage": coverage,
         **summary,
         "win_rate_definition": (
             "win_rate counts trades with pnl > 0 over triggered trades only. "
-            "With the default taker_fee=0 this equals (take_profit_exits + "
-            "forced_resolution_wins) / num_trades; with a nonzero taker_fee a "
-            "take-profit exit whose fee exceeds the gross gain counts as a loss."
+            "With the default taker_fee=0 and no taker fills this equals "
+            "(take_profit_exits + forced_resolution_wins) / num_trades; "
+            "fee-laden or taker exits can flip a small gross gain to a loss."
         ),
-        "assumptions": engine.ASSUMPTIONS,
-        "skew_note": (
-            f"Negative skew: upside is capped at {take_profit_cents}c per trade, "
-            f"but a forced loss costs the full {entry_c}c entry price."
+        "assumptions": strat_mod.ASSUMPTIONS,
+        "skew_note": skew,
+    }
+
+
+@mcp.tool
+def strategy_vocabulary() -> dict:
+    """The full schema of strategy bricks accepted by backtest(strategy=...).
+
+    Returns every condition type (with the exact quote each one reads),
+    execution styles, exit bricks, fee semantics, the fill-convention
+    assumptions, and three worked example strategies. Strategies are pure
+    structured data validated against this vocabulary; no user-supplied
+    code or expressions are ever evaluated.
+    """
+    return {
+        "vocabulary": strat_mod.VOCABULARY,
+        "assumptions": strat_mod.ASSUMPTIONS,
+        "fees": {
+            "maker": "limit entries and take-profits fill at their limit "
+                     "price with zero fee",
+            "taker": "market entries, stop-losses and time exits fill at the "
+                     "observed quote and pay taker_fee (flat fraction of "
+                     "notional, default 0)",
+            "disclaimer": "Real Polymarket taker fees are odds-dependent "
+                          "(largest near 50c, roughly up to ~1.8%). The flat "
+                          "taker_fee parameter is an approximation; no exact "
+                          "fee formula is modeled.",
+        },
+        "walk_forward_workflow": (
+            "Tune parameters on an in-sample range, then validate once "
+            "out-of-sample, e.g. backtest(strategy=..., "
+            "start_date='2026-03-05', end_date='2026-04-08') to optimize and "
+            "start_date='2026-04-09', end_date='2026-04-25' to validate. "
+            "The engine is no-look-ahead by construction: ticks are "
+            "processed in time order, entries strictly precede exits, and "
+            "resolution is consulted only after window_end."
         ),
     }
 

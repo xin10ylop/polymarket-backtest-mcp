@@ -59,7 +59,8 @@ can never leak into PnL.
 | `data_coverage` | date range, market counts, list of missing or partial days |
 | `list_markets` | browse markets with winner, price_to_beat, tradeability |
 | `get_price_series` | bid/ask series for both sides plus BTC reference, resampled |
-| `backtest` | the strategy simulator, see below |
+| `backtest` | the strategy simulator: legacy flat params or composed bricks |
+| `strategy_vocabulary` | the full schema of strategy bricks, with examples |
 | `market_context` | one market in full: window, strike, winner, tick coverage |
 
 ## The strategy that gets backtested
@@ -88,6 +89,84 @@ Stated assumptions (also returned by every backtest call):
 The results make the skew of this strategy very visible: win rates above 70%
 with negative expectancy, because the upside is capped at the take-profit
 while a forced loss costs the whole entry price.
+
+## Composable strategies (bricks)
+
+Beyond the flat parameters, `backtest` accepts a `strategy` object composed
+from a fixed vocabulary of predefined, individually tested building blocks.
+Strategies are pure structured data validated against a strict schema. No
+user-supplied code or expressions are ever evaluated.
+
+Entry conditions (all must hold at the same tick; empty list means the first
+tick): `price_level` (the side's ask for `<=`, bid for `>=`), `price_move`
+(change in the side's mid over a trailing window, cents or percent),
+`time_to_close` (seconds left), `btc_move` (BTC reference vs the market's
+first tick; a signal input only, never resolution). Executions: `limit`
+(maker, fills at the limit price, may never fill) or `market` (taker, fills
+at the observed ask, gaps work against you). Exits, first to trigger wins:
+`take_profit_cents` (maker, fills at the limit even on gaps),
+`stop_loss_cents` (taker, fills at the observed bid, so a gap through the
+stop costs more than the stop distance), `exit_seconds_before_close` (taker,
+observed bid), and hold-to-resolution as the default. Same-tick priority is
+stop, then take-profit, then time exit.
+
+Three examples:
+
+```json
+{"side": "down",
+ "entry": {"conditions": [
+     {"type": "price_level", "op": "<=", "value_cents": 30},
+     {"type": "time_to_close", "op": "<=", "seconds": 90}],
+   "execution": {"style": "market"}},
+ "exit": {}}
+```
+Buy Down at market when it trades under 30 cents with under 90 seconds left,
+hold to resolution.
+
+```json
+{"side": "up",
+ "entry": {"conditions": [
+     {"type": "price_move", "window_seconds": 30, "op": ">=",
+      "value": 5, "unit": "percent"}],
+   "execution": {"style": "market"}},
+ "exit": {"take_profit_cents": 5, "stop_loss_cents": 3}}
+```
+Buy Up at market on a 5 percent-in-30s upward move, 3 cent stop, 5 cent
+take-profit.
+
+```json
+{"side": "up",
+ "entry": {"conditions": [],
+   "execution": {"style": "limit", "limit_price_cents": 40}},
+ "exit": {"take_profit_cents": 5}}
+```
+The original v1 strategy in brick form. A regression test proves this
+reproduces the audited v1 numbers exactly over the full universe.
+
+Fees follow the venue: maker fills (limit entries, take-profits) are free;
+taker fills (market entries, stops, time exits) pay the `taker_fee`
+parameter, a flat fraction of notional. Real Polymarket taker fees are
+odds-dependent (largest near 50 cents, roughly up to about 1.8 percent), so
+the flat rate is a labeled approximation, not the venue formula.
+
+### Walk-forward testing
+
+Use `start_date`/`end_date` to keep parameter tuning honest: optimize on an
+in-sample range, then run the chosen parameters once on the held-out range.
+
+1. Tune: `backtest(strategy=..., start_date="2026-03-05", end_date="2026-04-08")`
+2. Validate: same strategy, `start_date="2026-04-09", end_date="2026-04-25"`
+
+The engine is no-look-ahead by construction, as verified in the audit:
+ticks are processed in time order, condition evaluation at a tick reads
+only that tick and earlier ones (trailing windows, forward-moving
+pointers), entries strictly precede exits, and the winner is consulted
+only after the last in-window tick.
+
+Runtime: a full-universe run takes a few seconds of CPU (about 6 to 7
+seconds measured locally); on a small shared host budget a couple of
+minutes. For heavy multi-condition strategies start with a date range or
+`max_markets`.
 
 ## Resolution rules
 

@@ -84,11 +84,15 @@ quote data.</p>
 
 <h2>What it does</h2>
 <ul>
-  <li><strong>backtest</strong> &mdash; simulate a resting limit buy at your
-      entry price with a fixed take-profit, one trade per market, across
-      ~14,000 historical 5-minute markets. Reports win rate, expectancy,
-      drawdown, equity curve, and the exact skew breakdown
-      (take-profit exits vs forced $1/$0 resolutions).</li>
+  <li><strong>backtest</strong> &mdash; simulate strategies one trade per market
+      across ~14,000 historical 5-minute markets. Reports win rate,
+      expectancy, drawdown, equity curve, entry fill stats, and the exact
+      exit breakdown (take-profit / stop / time exits vs forced $1/$0
+      resolutions).</li>
+  <li><strong>composable strategies</strong> &mdash; build entries and exits from
+      tested bricks: price levels, trailing price moves, time-to-close, BTC
+      moves; limit (maker) or market (taker) entries; take-profit, stop-loss,
+      time exits. Discover the schema with <strong>strategy_vocabulary</strong>.</li>
   <li><strong>data_coverage</strong> &mdash; the exact date range and any gap days
       behind every result.</li>
   <li><strong>list_markets</strong> / <strong>market_context</strong> /
@@ -99,8 +103,14 @@ quote data.</p>
 fees). Resolution uses the official market outcomes, never exchange reference
 prices. Static historical dataset; nothing here is financial advice.</p>
 
-<h2>Try this prompt</h2>
+<h2>Try these prompts</h2>
 <div class="prompt">"{EXAMPLE_PROMPT}"</div>
+<div class="prompt">"Backtest buying Down at market when it's under 30&cent;
+with under 90 seconds left, held to resolution"</div>
+<div class="prompt">"Backtest buying Up at market on a 5%-in-30s upward move
+with a 3&cent; stop and 5&cent; take-profit. Optimize the stop on
+2026-03-05 to 2026-04-08, then validate the best one out-of-sample on
+2026-04-09 to 2026-04-25"</div>
 
 <p class="note" style="margin-top:48px">Data: Kaggle datasets by
 <a href="https://www.kaggle.com/datasets/namz8888/polymarket-btc-5-minute-high-frequency-tick-data">namz8888</a>

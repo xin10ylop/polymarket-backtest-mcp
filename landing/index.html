@@ -69,25 +69,37 @@ quote data.</p>
 
 <h2>What it does</h2>
 <ul>
-  <li><strong>backtest</strong> &mdash; simulate a resting limit buy at your
-      entry price with a fixed take-profit, one trade per market, across
-      ~14,000 historical 5-minute markets. Reports win rate, expectancy,
-      drawdown, equity curve, and the exact skew breakdown
-      (take-profit exits vs forced $1/$0 resolutions).</li>
+  <li><strong>backtest</strong> &mdash; simulate strategies one trade per market
+      across ~14,000 historical 5-minute markets. Reports win rate,
+      expectancy, drawdown, equity curve, entry fill stats, and the exact
+      exit breakdown (take-profit / stop / time exits vs forced $1/$0
+      resolutions).</li>
+  <li><strong>composable strategies</strong> &mdash; build entries and exits from
+      tested bricks: price levels, trailing price moves, time-to-close, BTC
+      moves; limit (maker) or market (taker) entries; take-profit, stop-loss,
+      time exits. Discover the schema with <strong>strategy_vocabulary</strong>.</li>
   <li><strong>data_coverage</strong> &mdash; the exact date range and any gap days
       behind every result.</li>
   <li><strong>list_markets</strong> / <strong>market_context</strong> /
       <strong>get_price_series</strong> &mdash; browse individual markets, winners,
       price-to-beat, and bid/ask history.</li>
 </ul>
-<p class="note">Fills are touch-fills at the limit price (maker side, zero
-fees). Resolution uses the official market outcomes, never exchange reference
-prices. Static historical dataset; nothing here is financial advice.</p>
+<p class="note">Maker fills (limit entries, take-profits) execute at the limit
+price, fee 0; taker fills (market entries, stops, time exits) execute at the
+observed quote, so gaps work against you. Resolution uses the official market
+outcomes, never exchange reference prices. Static historical dataset; nothing
+here is financial advice.</p>
 
-<h2>Try this prompt</h2>
+<h2>Try these prompts</h2>
 <div class="prompt">"Backtest buying Up at 40&cent; with a 5&cent; take-profit
 across all markets and show me the win rate, the skew breakdown, and the date
 range tested"</div>
+<div class="prompt">"Backtest buying Down at market when it's under 30&cent;
+with under 90 seconds left, held to resolution"</div>
+<div class="prompt">"Backtest buying Up at market on a 5%-in-30s upward move
+with a 3&cent; stop and 5&cent; take-profit. Optimize the stop on
+2026-03-05 to 2026-04-08, then validate the best one out-of-sample on
+2026-04-09 to 2026-04-25"</div>
 
 <p class="note" style="margin-top:48px">
 Source code: <a href="https://github.com/xin10ylop/polymarket-backtest-mcp">github.com/xin10ylop/polymarket-backtest-mcp</a><br>
