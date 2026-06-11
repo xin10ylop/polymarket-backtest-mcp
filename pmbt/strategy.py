@@ -85,7 +85,10 @@ VOCABULARY = {
                 "description": "BTC reference price now vs the market's first "
                                "available reference tick. Display-grade "
                                "exchange feed: usable as a SIGNAL, never used "
-                               "for resolution.",
+                               "for resolution. This brick compares float "
+                               "dollar values (the feed is float by nature); "
+                               "all fill and PnL arithmetic stays integer "
+                               "tenths-of-a-cent.",
                 "example": {"type": "btc_move", "op": ">=", "value": 0.05,
                             "unit": "percent"},
             },
@@ -104,7 +107,10 @@ VOCABULARY = {
             "fields": {"style": "'market'"},
             "description": "Buy at the triggering tick's OBSERVED best_ask "
                            "(taker; taker_fee applies; gaps work against the "
-                           "buyer).",
+                           "buyer). A market buy needs a live ask, so ticks "
+                           "with no ask are skipped: the entry happens at the "
+                           "first tick where the conditions hold AND an ask "
+                           "exists.",
         },
     },
     "exit": {
@@ -407,6 +413,10 @@ def _compile_conditions(conds, ts, bid, ask, btc, window_end_ms):
                     if v is not None:
                         last = v
                     btc_ffill.append(last)
+            # baseline = the first non-null reference in the market. Its
+            # index can be later than early ticks, but that cannot leak the
+            # future: until that tick, btc_ffill[i] is None and the check
+            # below returns False, so no decision depends on the value.
             baseline = next((v for v in btc if v is not None), None)
             val, ge, pct = c["value"], c["op"] == ">=", c["unit"] == "percent"
 

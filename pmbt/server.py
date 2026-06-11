@@ -200,10 +200,12 @@ def backtest(
             end_ms=end_ms,
             max_markets=max_markets,
         )
+        t0 = time.monotonic()
         res = strat_mod.run_backtest(
             markets, lambda s: st.side_quotes_btc(s, strat.side), strat,
             taker_fee=taker_fee,
         )
+        runtime_s = time.monotonic() - t0
     except ValueError as e:
         return {"error": str(e)}
 
@@ -229,7 +231,7 @@ def backtest(
     else:
         skew = ("No take-profit set: PnL is driven by exit timing and $1/$0 "
                 "resolution outcomes.")
-    return {
+    out = {
         "params": {"taker_fee": taker_fee, "duration_minutes": duration_minutes},
         "strategy": strat.canonical,
         "coverage": coverage,
@@ -243,6 +245,14 @@ def backtest(
         "assumptions": strat_mod.ASSUMPTIONS,
         "skew_note": skew,
     }
+    if runtime_s > 20:
+        out["performance_note"] = (
+            f"This backtest took {runtime_s:.0f}s to simulate. For faster "
+            f"iteration, narrow the run with start_date/end_date or "
+            f"max_markets, then confirm the final parameters on the full "
+            f"range once."
+        )
+    return out
 
 
 @mcp.tool
