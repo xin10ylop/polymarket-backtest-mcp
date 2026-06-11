@@ -97,6 +97,34 @@ outcomes file of the 100ms dataset, never from the Binance/Coinbase/Kraken
 reference prices in the data, because those prints differ from Chainlink
 enough to flip close markets.
 
+## Audit and verification
+
+The whole pipeline went through a skeptical quant review after it was built.
+The two results worth knowing:
+
+- The headline backtest was reproduced independently. A separate script
+  (`scripts/audit_independent_backtest.py`) recomputes the example strategy
+  (buy Up at 40 cents, 5 cent take-profit) straight from the raw 42.7 million
+  100ms ticks, bypassing the SQLite store and the engine completely. It
+  produced the exact same numbers: 11,245 trades, 8,456 take-profit exits,
+  4 forced wins, 2,785 forced losses, 75.23% win rate, total PnL -$688.80,
+  expectancy -$0.0613 per trade. This also proves the quote-change
+  deduplication in the store loses no fill information.
+- Resolving on exchange prices would get 5.24% of markets wrong. 752 of the
+  14,361 markets would flip their winner if it were derived from the Binance
+  reference feed (last in-window print vs first) instead of taken from the
+  official outcomes file. Polymarket resolves on Chainlink, and near-tie
+  windows land on different sides of different feeds. That is why the engine
+  takes winners only from the outcomes file and treats every BTC reference
+  price as display-only.
+
+The audit also checked store integrity (no orphan quotes, no duplicate or
+out-of-order ticks, no quotes outside their market window, slug arithmetic
+holds for all 15,552 markets), date-boundary behavior of the filters, output
+caps on every tool, and the no-auth connector surface. The one real bug it
+found (a negative `limit` could bypass the `list_markets` row cap) is fixed
+and has a regression test.
+
 ## Data
 
 Two Kaggle datasets, credit where due:
@@ -150,6 +178,18 @@ ephemeral does not matter; the store ships inside the image.
 
 Railway and Fly work the same way: deploy the Dockerfile, expose `$PORT`,
 done. The server listens on `0.0.0.0:$PORT` and defaults to 8000.
+
+## Deploy checklist (end to end)
+
+1. Deploy the repo to Render (steps above) and wait for the build to go green.
+2. Copy the Render URL, e.g. `https://your-app.onrender.com`.
+3. Set it in `landing/index.html`: replace the `CONNECTOR_URL` constant at the
+   top of the script block (one place only), keeping the `/mcp` suffix.
+4. Drag the `landing/` folder onto [netlify.com](https://app.netlify.com/drop)
+   to publish the static landing page.
+5. Test the connector in Claude: Settings, Connectors, Add custom connector,
+   paste `https://your-app.onrender.com/mcp`, then enable it in a chat via the
+   plus menu and ask for a backtest.
 
 ## Add it to Claude
 

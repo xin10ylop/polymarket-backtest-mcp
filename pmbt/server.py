@@ -200,6 +200,12 @@ def backtest(
         },
         "coverage": coverage,
         **summary,
+        "win_rate_definition": (
+            "win_rate counts trades with pnl > 0 over triggered trades only. "
+            "With the default taker_fee=0 this equals (take_profit_exits + "
+            "forced_resolution_wins) / num_trades; with a nonzero taker_fee a "
+            "take-profit exit whose fee exceeds the gross gain counts as a loss."
+        ),
         "assumptions": engine.ASSUMPTIONS,
         "skew_note": (
             f"Negative skew: upside is capped at {take_profit_cents}c per trade, "

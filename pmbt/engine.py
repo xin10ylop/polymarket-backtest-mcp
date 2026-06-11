@@ -16,6 +16,8 @@ ASSUMPTIONS = [
     "best quote touches their level (touch-fill, full size, no queue or depth model).",
     "Both legs are maker orders; Polymarket makers pay zero fees on these markets, "
     "so the default fee is 0. taker_fee is an optional override.",
+    "The take-profit is evaluated only on ticks strictly after the entry tick: "
+    "an entry and its exit can never fill on the same tick.",
     "If the take-profit never fills, the position is force-resolved at window end: "
     "$1.00 if the held side won, $0.00 if it lost. No fee on redemption.",
     "Static historical dataset; one trade per market maximum.",

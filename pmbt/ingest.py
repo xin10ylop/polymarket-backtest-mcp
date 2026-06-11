@@ -40,13 +40,24 @@ PRIMARY_DATASET = "namz8888/polymarket-btc-5-minute-high-frequency-tick-data"
 SUPP_DATASET = "debayan31415/polymarket-5-minutes-btc-up-down-data"
 
 SLUG_RE = re.compile(r"-(\d+)$")
+SLUG_DUR_RE = re.compile(r"-(\d+)m-")
 
 
-def slug_window(slug: str, duration_minutes: int = 5):
+def slug_duration(slug: str) -> int:
+    """Duration in minutes from the slug ('btc-updown-5m-...' -> 5)."""
+    m = SLUG_DUR_RE.search(slug)
+    if not m:
+        raise ValueError(f"cannot parse duration from slug: {slug}")
+    return int(m.group(1))
+
+
+def slug_window(slug: str, duration_minutes: int | None = None):
     """Canonical key: numeric suffix is the UTC unix second of window start."""
     m = SLUG_RE.search(slug)
     if not m:
         raise ValueError(f"cannot parse window start from slug: {slug}")
+    if duration_minutes is None:
+        duration_minutes = slug_duration(slug)
     start_ms = int(m.group(1)) * 1000
     return start_ms, start_ms + duration_minutes * 60_000
 
@@ -241,10 +252,16 @@ def run(raw_dir: str, db_path: str):
     # tradeable universe: in primary outcomes AND has in-window quotes,
     # minus cross-validation disagreements
     for slug, row in outcomes.iterrows():
-        ws_ms, we_ms = slug_window(slug)
-        assert ws_ms == row["window_start_ts"] * 1000, f"slug/window mismatch: {slug}"
+        # the outcomes file's own window bounds are authoritative; the slug
+        # suffix and embedded duration must agree with them
+        ws_ms = int(row["window_start_ts"]) * 1000
+        we_ms = int(row["window_end_ts"]) * 1000
+        duration = (we_ms - ws_ms) // 60_000
+        assert (ws_ms, we_ms) == slug_window(slug), f"slug/window mismatch: {slug}"
         a = agg.get(slug)
         tick_count = a[0] if a else 0
+        if a and a[3] != duration:
+            print(f"WARN {slug}: interval_min={a[3]} != window duration {duration}")
         tradeable = 1 if (tick_count > 0 and slug not in excluded) else 0
         sup = supp.get(slug)
         if sup and sup["price_to_beat"] is not None:
@@ -255,7 +272,7 @@ def run(raw_dir: str, db_path: str):
         else:
             ptb, src = None, None
         market_rows.append((
-            slug, ws_ms, we_ms, a[3] if a else 5, row["winner"], ptb, src,
+            slug, ws_ms, we_ms, duration, row["winner"], ptb, src,
             "primary_outcomes", tradeable, tick_count,
             None if not a or np.isnan(a[1]) else float(a[1]),
             None if not a or np.isnan(a[2]) else float(a[2]),
@@ -267,7 +284,7 @@ def run(raw_dir: str, db_path: str):
             continue
         ws_ms, we_ms = slug_window(slug)
         market_rows.append((
-            slug, ws_ms, we_ms, 5, sup["winner"], sup["price_to_beat"],
+            slug, ws_ms, we_ms, slug_duration(slug), sup["winner"], sup["price_to_beat"],
             "official" if sup["price_to_beat"] is not None else None,
             "supplementary_2s", 0, 0, None, None,
         ))

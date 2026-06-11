@@ -80,6 +80,35 @@ def test_backtest_universe_carries_no_price_to_beat(db):
         assert set(m.keys()) == {"slug", "window_start_ms", "winner", "tradeable"}
 
 
+def test_slug_window_is_duration_agnostic():
+    from pmbt.ingest import slug_duration, slug_window
+
+    # a 15m market must get a 15-minute window end, not a hardcoded 5m one
+    assert slug_duration("btc-updown-15m-1773100800") == 15
+    ws, we = slug_window("btc-updown-15m-1773100800")
+    assert ws == 1773100800000
+    assert we - ws == 15 * 60_000
+    ws, we = slug_window("btc-updown-5m-1773100800")
+    assert we - ws == 5 * 60_000
+
+
+def test_list_markets_limit_cannot_be_bypassed(db):
+    # regression: limit=-1 used to reach SQLite as LIMIT -1 (unlimited)
+    rows = db.list_markets(limit=-1)
+    assert len(rows) == 1
+    rows = db.list_markets(limit=0)
+    assert len(rows) == 1
+    rows = db.list_markets(limit=5000)
+    assert len(rows) <= 1000
+    # negative offset must not error and must return valid rows from the start
+    rows = db.list_markets(limit=10, offset=-7)
+    assert [r["slug"] for r in rows] == [
+        "btc-updown-5m-1771847400",
+        "btc-updown-5m-1773100800",
+        "btc-updown-5m-1773187200",
+    ]
+
+
 def test_full_pipeline_on_fixture(db):
     universe = db.markets_for_backtest()
     res = run_backtest(universe, lambda s: db.side_quotes(s, "up"), "up", 0.40, 5)
