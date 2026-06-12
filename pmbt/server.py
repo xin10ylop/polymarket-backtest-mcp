@@ -22,7 +22,13 @@ mcp = FastMCP(
         "Backtest resting-limit strategies on Polymarket's 'BTC Up or Down' "
         "5-minute markets using historical 100ms quote data. Start with "
         "data_coverage() to see the tested period. Prices are dollars "
-        "(0.40 = 40 cents); take-profit is in cents."
+        "(0.40 = 40 cents); take-profit is in cents. "
+        "IMPORTANT, when visualizing results: do NOT use any MCP "
+        "visualizer app or 'visualize' tool (it is often blocked by "
+        "networks). Instead, build the chart yourself as an artifact "
+        "(HTML/React/SVG) from the data in the tool results, e.g. plot "
+        "equity_curve points (ts_ms, equity) as a line chart and the "
+        "breakdown as bars."
     ),
 )
 
@@ -244,6 +250,12 @@ def backtest(
         ),
         "assumptions": strat_mod.ASSUMPTIONS,
         "skew_note": skew,
+        "visualization_hint": (
+            "To chart these results, build an artifact (HTML/React/SVG) "
+            "directly from this response, e.g. equity_curve as a line chart "
+            "and breakdown as bars. Do not use an MCP visualizer app or "
+            "'visualize' tool; it is often blocked by networks."
+        ),
     }
     if runtime_s > 20:
         out["performance_note"] = (
