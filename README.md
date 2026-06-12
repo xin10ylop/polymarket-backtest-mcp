@@ -1,45 +1,134 @@
-# Polymarket BTC Backtester (hosted MCP server)
+# Polymarket BTC Backtester
 
-A public MCP server for backtesting simple limit-order strategies on
-Polymarket's "BTC Up or Down" 5-minute markets. You paste one URL into
-Claude as a custom connector and then ask things like:
+An MCP server you add to Claude with one URL. Once connected, you can ask
+Claude things like "backtest buying Up at 40 cents with a 5 cent take-profit"
+and it will run that strategy against 14,361 real Polymarket "BTC Up or Down"
+5-minute markets and tell you the win rate, the profit per trade, and where
+the strategy breaks.
 
-> Backtest buying Up at 40 cents with a 5 cent take-profit across all markets
-> and show me the win rate, the skew breakdown, and the date range tested.
-
-Connector URL (replace with your deployment):
+That's the whole idea. Claude is the interface, this server does the math.
+No signup, no API key. You paste the URL, enable the connector in a chat,
+and ask away.
 
 ```
-https://<your-app>.onrender.com/mcp
+https://<your-app>.onrender.com/mcp     <- your URL after deploying (see below)
 ```
 
-No login, no API key. The server is read-only and serves a static historical
-dataset, so there is nothing to protect. A small per-IP rate limit keeps it
-polite.
+## Why this exists
 
-## How it works
+Polymarket runs a market every 5 minutes on whether Bitcoin will end the
+window higher or lower. The token prices move fast and the strategies people
+come up with sound great on paper. Most of them lose money, and the way they
+lose is sneaky: a strategy can win 75% of the time and still bleed out,
+because wins are capped at a few cents while losses eat the whole entry
+price. Run it here first, on real historical data, before any of it touches
+a wallet.
+
+The numbers behind that example, from this very dataset: buying Up at 40
+cents with a 5 cent take-profit wins 75.2% of the time and still loses 6
+cents per trade. Break-even would need 88.9%.
+
+## What you can ask
+
+Plain English works. Claude reads the tool schema and turns your request
+into a strategy spec.
+
+- "Backtest buying Up at 40 cents with a 5 cent take-profit across all markets"
+- "Buy Down at market when it's under 30 cents with less than 90 seconds left, hold to resolution"
+- "Buy Up when it jumps 5% in 30 seconds, with a 3 cent stop and a 5 cent take-profit"
+- "Optimize a strategy on March data, then validate it out-of-sample on April"
+
+Strategies are built from fixed pieces the server knows how to run: entry
+conditions (price level, price momentum, time left, BTC move), limit or
+market entries, and take-profit, stop-loss or timed exits. Claude never
+sends code, only structured parameters checked against a schema. The fixed
+vocabulary is what makes the engine trustworthy: every piece is unit tested
+on its own.
+
+## The tools
+
+| tool | what it does |
+|---|---|
+| `backtest` | runs a strategy over the historical markets, one trade per market |
+| `strategy_vocabulary` | the full schema of strategy pieces, with examples |
+| `data_coverage` | the exact date range behind every result, plus gap days |
+| `list_markets` | browse markets with winners and metadata |
+| `get_price_series` | bid/ask history for one market, resampled |
+| `market_context` | everything known about a single market |
+
+Every backtest answer includes the date range actually tested, the exit
+breakdown (take-profits vs stops vs forced resolutions), the fill
+assumptions, and an equity curve.
+
+## How the simulation works
+
+The engine tries to be honest about how orders actually fill:
+
+- A resting limit order fills at your price when the opposing quote touches
+  it. Makers pay no fees on these markets, so those fills are free.
+- A market order fills at whatever the quote actually is at that moment, so
+  gaps hurt you, same as live. Taker fills can carry a flat fee you set.
+- A stop-loss is a market order: if the bid gaps from 38 to 20 cents, you
+  get 20, not your 35 cent stop. The take-profit is the opposite: it is a
+  resting order, so it fills at your limit even when the price jumps past it.
+- If nothing exits before the window closes, the position resolves at $1.00
+  or $0.00 based on the official market outcome. Ties go to Up, per
+  Polymarket's rules.
+- All prices are integers internally (tenths of a cent), so there is no
+  float rounding anywhere in the fill logic.
+- One trade per market, ticks processed in time order, and nothing can peek
+  ahead: a condition at a given tick only sees that tick and earlier ones,
+  and the winner is only consulted after the window ends.
+
+## The data
+
+Two Kaggle datasets, full credit to their authors:
+
+- [Polymarket BTC 5-Minute 100ms Market Data](https://www.kaggle.com/datasets/namz8888/polymarket-btc-5-minute-high-frequency-tick-data)
+  by namz8888. The backbone: 100ms bid/ask snapshots and official outcomes
+  for 14,361 markets across 52 days (March 5 to April 25, 2026). After
+  deduplication that's 6.9 million quote changes.
+- [Polymarket 5 minutes BTC UP Down data](https://www.kaggle.com/datasets/debayan31415/polymarket-5-minutes-btc-up-down-data)
+  by debayan31415. A 2-second dataset used only for metadata, like the
+  official strike price. Its markets are never traded on, since 2-second
+  sampling misses the price touches the fill logic depends on.
+
+The two datasets cover adjacent date ranges and share zero markets, so the
+strike prices shown for tradeable markets come from an exchange reference
+feed and are marked as approximate. They are display only.
+
+One thing worth stressing: winners always come from the official outcomes
+file, never from BTC exchange prices. Polymarket resolves on Chainlink, and
+the feeds disagree enough that 752 of the 14,361 markets (5.24%) would flip
+their result if you resolved them on the Binance feed instead. The engine
+is built so reference prices physically cannot reach the PnL code.
+
+## Audit
+
+After the build, the whole thing went through a skeptical review. The
+headline backtest was recomputed by a separate script straight from the raw
+42.7 million ticks, skipping the database and the engine entirely, and it
+landed on the same numbers to the cent: 11,245 trades, total PnL of
+-$688.80, expectancy of -$0.0613. That check now lives in the test suite as
+a permanent regression anchor, next to 47 other tests covering fills,
+resolution ties, look-ahead safety, fee handling, and schema validation.
+
+## Architecture
 
 ```
  Kaggle datasets (downloaded once, at image build time)
  ┌─────────────────────────────┐  ┌──────────────────────────┐
  │ 100ms ticks + outcomes      │  │ 2s snapshots (metadata)  │
- │ namz8888, ~14k markets      │  │ debayan31415, 1,191 mkts │
  └─────────────┬───────────────┘  └────────────┬─────────────┘
                │   pmbt/ingest.py              │
-               │   - in-window quotes only     │
-               │   - dedup to quote changes    │
-               │   - prices -> integer 1/10c   │
-               │   - winners from outcomes     │
-               │   - price_to_beat + x-check   │
                ▼                               ▼
          ┌───────────────────────────────────────────┐
          │ data/store.db (SQLite, read-only, ~700MB) │
-         │ markets / quotes / meta                   │
          └─────────────────────┬─────────────────────┘
                                │
          ┌─────────────────────┴─────────────────────┐
          │ pmbt/server.py (FastMCP, streamable HTTP) │
-         │  /mcp     5 tools                         │
+         │  /mcp     six tools                       │
          │  /        landing page                    │
          │  /health  liveness                        │
          └─────────────────────┬─────────────────────┘
@@ -48,190 +137,15 @@ polite.
                   Claude custom connector
 ```
 
-The backtest engine (`pmbt/engine.py`) is pure functions over integer prices.
-It knows nothing about BTC reference prices or price_to_beat, so display data
-can never leak into PnL.
-
-## Tools
-
-| tool | what it does |
-|---|---|
-| `data_coverage` | date range, market counts, list of missing or partial days |
-| `list_markets` | browse markets with winner, price_to_beat, tradeability |
-| `get_price_series` | bid/ask series for both sides plus BTC reference, resampled |
-| `backtest` | the strategy simulator: legacy flat params or composed bricks |
-| `strategy_vocabulary` | the full schema of strategy bricks, with examples |
-| `market_context` | one market in full: window, strike, winner, tick coverage |
-
-## The strategy that gets backtested
-
-For each market in the chosen date range:
-
-1. Rest a limit buy on the chosen side at your entry price. It fills at the
-   first tick where that side's best ask is at or below the entry price,
-   always at the entry price exactly. One trade per market, full size.
-2. On entry, rest a limit sell at entry plus the take-profit. It fills at the
-   first later tick where the best bid reaches the target, always at the limit
-   price, even when the bid gaps through it.
-3. If the take-profit never fills, the position rides to resolution: $1.00 if
-   the held side won, $0.00 if it lost.
-
-Stated assumptions (also returned by every backtest call):
-
-- Touch-fill: resting orders fill when the opposing best quote reaches their
-  level. No queue position or book depth model. Empirically reasonable in
-  these very liquid markets, still an approximation.
-- Both legs are maker orders and Polymarket makers pay zero fees here, so the
-  default fee is 0. A `taker_fee` override exists for simulating market orders.
-- Redemption at $1/$0 is free.
-- Static dataset. Past quotes, not live ones.
-
-The results make the skew of this strategy very visible: win rates above 70%
-with negative expectancy, because the upside is capped at the take-profit
-while a forced loss costs the whole entry price.
-
-## Composable strategies (bricks)
-
-Beyond the flat parameters, `backtest` accepts a `strategy` object composed
-from a fixed vocabulary of predefined, individually tested building blocks.
-Strategies are pure structured data validated against a strict schema. No
-user-supplied code or expressions are ever evaluated.
-
-Entry conditions (all must hold at the same tick; empty list means the first
-tick): `price_level` (the side's ask for `<=`, bid for `>=`), `price_move`
-(change in the side's mid over a trailing window, cents or percent),
-`time_to_close` (seconds left), `btc_move` (BTC reference vs the market's
-first tick; a signal input only, never resolution). Executions: `limit`
-(maker, fills at the limit price, may never fill) or `market` (taker, fills
-at the observed ask, gaps work against you). Exits, first to trigger wins:
-`take_profit_cents` (maker, fills at the limit even on gaps),
-`stop_loss_cents` (taker, fills at the observed bid, so a gap through the
-stop costs more than the stop distance), `exit_seconds_before_close` (taker,
-observed bid), and hold-to-resolution as the default. Same-tick priority is
-stop, then take-profit, then time exit.
-
-Three examples:
-
-```json
-{"side": "down",
- "entry": {"conditions": [
-     {"type": "price_level", "op": "<=", "value_cents": 30},
-     {"type": "time_to_close", "op": "<=", "seconds": 90}],
-   "execution": {"style": "market"}},
- "exit": {}}
-```
-Buy Down at market when it trades under 30 cents with under 90 seconds left,
-hold to resolution.
-
-```json
-{"side": "up",
- "entry": {"conditions": [
-     {"type": "price_move", "window_seconds": 30, "op": ">=",
-      "value": 5, "unit": "percent"}],
-   "execution": {"style": "market"}},
- "exit": {"take_profit_cents": 5, "stop_loss_cents": 3}}
-```
-Buy Up at market on a 5 percent-in-30s upward move, 3 cent stop, 5 cent
-take-profit.
-
-```json
-{"side": "up",
- "entry": {"conditions": [],
-   "execution": {"style": "limit", "limit_price_cents": 40}},
- "exit": {"take_profit_cents": 5}}
-```
-The original v1 strategy in brick form. A regression test proves this
-reproduces the audited v1 numbers exactly over the full universe.
-
-Fees follow the venue: maker fills (limit entries, take-profits) are free;
-taker fills (market entries, stops, time exits) pay the `taker_fee`
-parameter, a flat fraction of notional. Real Polymarket taker fees are
-odds-dependent (largest near 50 cents, roughly up to about 1.8 percent), so
-the flat rate is a labeled approximation, not the venue formula.
-
-### Walk-forward testing
-
-Use `start_date`/`end_date` to keep parameter tuning honest: optimize on an
-in-sample range, then run the chosen parameters once on the held-out range.
-
-1. Tune: `backtest(strategy=..., start_date="2026-03-05", end_date="2026-04-08")`
-2. Validate: same strategy, `start_date="2026-04-09", end_date="2026-04-25"`
-
-The engine is no-look-ahead by construction, as verified in the audit:
-ticks are processed in time order, condition evaluation at a tick reads
-only that tick and earlier ones (trailing windows, forward-moving
-pointers), entries strictly precede exits, and the winner is consulted
-only after the last in-window tick.
-
-Runtime: a full-universe run takes a few seconds of CPU (about 6 to 7
-seconds measured locally); on a small shared host budget a couple of
-minutes. For heavy multi-condition strategies start with a date range or
-`max_markets`.
-
-## Resolution rules
-
-"Up" wins when the Chainlink BTC/USD price at window end is at or above the
-price at window start. Ties resolve Up. The engine takes winners only from the
-outcomes file of the 100ms dataset, never from the Binance/Coinbase/Kraken
-reference prices in the data, because those prints differ from Chainlink
-enough to flip close markets.
-
-## Audit and verification
-
-The whole pipeline went through a skeptical quant review after it was built.
-The two results worth knowing:
-
-- The headline backtest was reproduced independently. A separate script
-  (`scripts/audit_independent_backtest.py`) recomputes the example strategy
-  (buy Up at 40 cents, 5 cent take-profit) straight from the raw 42.7 million
-  100ms ticks, bypassing the SQLite store and the engine completely. It
-  produced the exact same numbers: 11,245 trades, 8,456 take-profit exits,
-  4 forced wins, 2,785 forced losses, 75.23% win rate, total PnL -$688.80,
-  expectancy -$0.0613 per trade. This also proves the quote-change
-  deduplication in the store loses no fill information.
-- Resolving on exchange prices would get 5.24% of markets wrong. 752 of the
-  14,361 markets would flip their winner if it were derived from the Binance
-  reference feed (last in-window print vs first) instead of taken from the
-  official outcomes file. Polymarket resolves on Chainlink, and near-tie
-  windows land on different sides of different feeds. That is why the engine
-  takes winners only from the outcomes file and treats every BTC reference
-  price as display-only.
-
-The audit also checked store integrity (no orphan quotes, no duplicate or
-out-of-order ticks, no quotes outside their market window, slug arithmetic
-holds for all 15,552 markets), date-boundary behavior of the filters, output
-caps on every tool, and the no-auth connector surface. The one real bug it
-found (a negative `limit` could bypass the `list_markets` row cap) is fixed
-and has a regression test.
-
-## Data
-
-Two Kaggle datasets, credit where due:
-
-- [Polymarket BTC 5-Minute 100ms Market Data](https://www.kaggle.com/datasets/namz8888/polymarket-btc-5-minute-high-frequency-tick-data)
-  by namz8888. The backbone: 100ms quotes and resolved outcomes for ~14,000
-  markets over about 7 weeks (2026-03-05 to 2026-04-25). The tradeable
-  universe is exactly the markets here that have both quotes and an outcome.
-- [Polymarket 5 minutes BTC UP Down data](https://www.kaggle.com/datasets/debayan31415/polymarket-5-minutes-btc-up-down-data)
-  by debayan31415. 2s snapshots for 1,191 markets (2026-02-23 to 2026-03-05).
-  Used only for the official price_to_beat and for cross-checking winners.
-  Markets that exist only here are never backtested, since 2s sampling misses
-  price touches.
-
-The two datasets currently share zero markets (they cover adjacent date
-ranges), so cross-validation had nothing to flag and tradeable markets show an
-approximate price_to_beat taken from the first reference tick. That value is
-display only. See `docs/DATA_SCHEMA.md` for the full schema and decisions.
-
 ## Run it locally
 
 ```bash
 pip install -r requirements.txt
 
-# build the data store (~600MB download, a few minutes)
+# build the data store (downloads ~600MB from Kaggle, takes a few minutes)
 python -m pmbt.ingest --download --raw data_raw --db data/store.db
 
-# tests
+# tests (includes the full-data regression anchor when the store exists)
 python -m pytest tests/ -q
 
 # serve
@@ -240,62 +154,53 @@ PORT=8000 python -m pmbt.server
 # MCP endpoint: http://localhost:8000/mcp
 ```
 
-## Deploy to Render
+## Deploy
 
-The Dockerfile downloads the datasets and builds the SQLite store during the
-image build, so the running container never fetches data. Host disks being
-ephemeral does not matter; the store ships inside the image.
+The Dockerfile downloads the datasets and builds the SQLite store during
+the image build, so the running container never needs the network for data.
 
 1. Push this repo to GitHub.
 2. On [render.com](https://render.com): New, then Web Service, then connect
-   the repo. Render picks up `render.yaml` and the Dockerfile automatically
-   (runtime: Docker, health check on `/health`). The starter plan is enough;
-   the image is about 1GB because of the baked store.
-3. Wait for the build (the Kaggle download runs inside it, expect ~10 min).
-4. Your connector URL is `https://<app-name>.onrender.com/mcp`. HTTPS is
-   automatic. Open the root URL to see the landing page with the copy button.
+   the repo. Render picks up `render.yaml` and the Dockerfile on its own.
+   The build takes around 10 minutes because the Kaggle download runs
+   inside it.
+3. Your connector URL is `https://<app-name>.onrender.com/mcp`.
+4. Open `landing/index.html`, put that URL into the `CONNECTOR_URL`
+   constant at the top of the script block (it lives in that one spot), and
+   drag the `landing/` folder onto [netlify.com](https://app.netlify.com/drop)
+   to publish the standalone landing page.
+5. Test it in Claude: Settings, Connectors, Add custom connector, paste the
+   URL, then enable it in a chat through the + menu.
 
-Railway and Fly work the same way: deploy the Dockerfile, expose `$PORT`,
-done. The server listens on `0.0.0.0:$PORT` and defaults to 8000.
+Railway and Fly work too: deploy the Dockerfile, expose `$PORT`, done.
 
-## Deploy checklist (end to end)
+## Notes on auth and limits
 
-1. Deploy the repo to Render (steps above) and wait for the build to go green.
-2. Copy the Render URL, e.g. `https://your-app.onrender.com`.
-3. Set it in `landing/index.html`: replace the `CONNECTOR_URL` constant at the
-   top of the script block (one place only), keeping the `/mcp` suffix.
-4. Drag the `landing/` folder onto [netlify.com](https://app.netlify.com/drop)
-   to publish the static landing page.
-5. Test the connector in Claude: Settings, Connectors, Add custom connector,
-   paste `https://your-app.onrender.com/mcp`, then enable it in a chat via the
-   plus menu and ask for a backtest.
-
-## Add it to Claude
-
-1. Settings, then Connectors, then Add custom connector.
-2. Paste the `/mcp` URL. No auth fields needed; the connector flow probes the
-   OAuth discovery endpoints, gets clean 404s, and falls back to anonymous.
-3. In a chat, open the plus menu and enable the connector.
-4. Ask for a backtest.
+There is no auth on purpose. The server is read-only over a static dataset,
+and Claude's custom connector flow only supports authless or OAuth servers.
+A light per-IP rate limit keeps things polite, and slow full-universe runs
+include a hint suggesting a date range.
 
 ## Repo layout
 
 ```
 pmbt/
-  ingest.py    Kaggle files -> SQLite store
-  store.py     store schema + connections
-  db.py        read-only query layer
-  engine.py    backtest engine (pure, integer prices)
-  server.py    FastMCP server, tools, rate limiting
-  landing.py   the landing page HTML
+  ingest.py      Kaggle files -> SQLite store
+  store.py       store schema and connections
+  db.py          read-only query layer
+  engine.py      the original v1 engine, kept as the audited reference
+  strategy.py    the composable strategy engine
+  server.py      FastMCP server, tools, rate limiting
+  landing.py     serves the landing page template
 scripts/
-  discover_schema.py   raw-schema dump (run before trusting any column name)
-docs/
-  DATA_SCHEMA.md             schemas and ingest decisions
-  schema_discovery_output.txt captured discovery output
-tests/         engine + store tests (22)
-Dockerfile     two-stage build, store baked at build time
-render.yaml    Render blueprint
+  discover_schema.py            schema dump of the raw files
+  audit_independent_backtest.py the independent recompute from the audit
+docs/            data schema and decisions
+tests/           48 tests
+landing/         standalone page for Netlify (drag and drop)
+Dockerfile       two-stage build, store baked in at build time
+render.yaml      Render blueprint
 ```
 
-Not financial advice. Built as a portfolio project.
+Educational and research use on static historical data. Not financial
+advice. Not affiliated with Polymarket.

@@ -338,9 +338,9 @@
 
   <section class="trust wrap">
     <div class="trust-strip">
-      <span><b>14,361</b> markets</span>
+      <span><b>__MARKETS__</b> markets</span>
       <span class="sep">&middot;</span>
-      <span><b>52</b> days <span class="muted">(Mar 5 to Apr 25, 2026)</span></span>
+      <span><b>__DAYS__</b> days <span class="muted">(Mar 5 to Apr 25, 2026)</span></span>
       <span class="sep">&middot;</span>
       <span><b>100ms</b> bid/ask ticks</span>
       <span class="sep">&middot;</span>
@@ -369,10 +369,9 @@
 </div>
 
 <script>
-// === The connector URL lives here and ONLY here. After deploying the MCP
-// === server to Render, replace the value below with your real endpoint,
-// === e.g. "https://your-app.onrender.com/mcp".
-const CONNECTOR_URL = "REPLACE_WITH_RENDER_URL/mcp";
+// Injected by the server (pmbt/landing.py); this page always shows its
+// own live endpoint.
+const CONNECTOR_URL = __CONNECTOR_URL__;
 
 const GITHUB_URL = "https://github.com/xin10ylop/polymarket-backtest-mcp";
 
